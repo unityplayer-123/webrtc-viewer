@@ -2,66 +2,67 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>WebRTC Viewer</title>
-  <style>
-    body { margin: 0; background: black; }
-    video { width: 100vw; height: 100vh; object-fit: contain; }
-  </style>
+  <title>WebRTC Receiver</title>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
+  <h2>Unity 映像受信中...</h2>
+  <video id="remoteVideo" autoplay playsinline style="width: 100%; max-width: 600px;"></video>
 
   <script>
-    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+    const signalingUrl = 'wss://webrtc-signaling-server-va4t.onrender.com';
+    const video = document.getElementById('remoteVideo');
+
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        {
-          urls: "turn:openrelay.metered.ca:80",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        }
-      ]
+      iceServers: [{
+        urls: [
+          "stun:stun.l.google.com:19302",
+          "turn:openrelay.metered.ca:443"
+        ],
+        username: "openrelayproject",
+        credential: "openrelayproject"
+      }]
     });
 
-    const video = document.getElementById("video");
+    const ws = new WebSocket(signalingUrl);
 
-    pc.ontrack = (event) => {
-      console.log("Track received");
-      video.srcObject = event.streams[0];
+    ws.onopen = () => {
+      console.log("WebSocket connected to signaling server");
     };
 
-    const socket = new WebSocket(signalingUrl);
-
-    socket.onopen = () => {
-      console.log("WebSocket connected");
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
     };
 
-    socket.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
+      console.log("Received message:", msg);
 
-      if (data.type === "offer") {
-        console.log("Received offer");
-        await pc.setRemoteDescription(new RTCSessionDescription(data));
-
+      if (msg.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(msg));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
-        socket.send(JSON.stringify({
-          type: "answer",
-          sdp: answer.sdp
-        }));
+        ws.send(JSON.stringify(pc.localDescription));
+      } else if (msg.type === 'candidate') {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate({
+            candidate: msg.candidate,
+            sdpMid: msg.sdpMid,
+            sdpMLineIndex: msg.sdpMLineIndex
+          }));
+        } catch (e) {
+          console.warn("Error adding ICE candidate:", e);
+        }
       }
+    };
 
-      if (data.type === "candidate") {
-        console.log("Received candidate");
-        pc.addIceCandidate(new RTCIceCandidate(data));
-      }
+    pc.ontrack = (event) => {
+      console.log("Received remote stream");
+      video.srcObject = event.streams[0];
     };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        socket.send(JSON.stringify({
+        ws.send(JSON.stringify({
           type: "candidate",
           candidate: event.candidate.candidate,
           sdpMid: event.candidate.sdpMid,
